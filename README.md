@@ -12,4 +12,4 @@ Required parts:
 
 Wiring:
 
-![alt tag](https://raw.githubusercontent.com/slacker87/CoreIR/master/coreIR_schematic.png)
+![Schematic](coreIR_schematic.png)
