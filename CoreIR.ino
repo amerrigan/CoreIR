@@ -13,32 +13,30 @@
 //CONFIGURABLE SECTION - SET TRANSPONDER ID
 //Change transponder ID # by setting a different transponder number for tx_id
 //WARNING: IDs set by CoreIR-Uplink tool will override these numbers
-const long tx_id = 5118895;
+const long tx_id = 1242428;
 const long tx_alt_id = 8901234;
-const int easylap_id = 2;
 
 // Enable debug info on serial output
 //#define debug
 
-// EasyRaceLapTimer support ---- TESTING
-//  #define easytimer
+// New softserial output ---- TESTING
+//#define softout
 
 //check which arduino board we are using and build accordingly
-#if defined(__AVR_ATtiny84__) || defined(__AVR_ATtiny167__) || defined(__AVR_ATtiny85__)
+#if defined(__AVR_ATtiny84__) || defined(__AVR_ATtiny167__) || defined(__AVR_ATtiny85)
   //if using an attiny build with all defaults, don't define anything
 #elif defined(__AVR_ATmega32U4__)
   //if using an arduino micro build with eeprom enabled and different LED pin
   #define atmega
   #define micro
-#elif defined(__AVR_ATmega328p__) || defined(__AVR_ATmega64__) || defined(__AVR_ATmega128__) || defined(__AVR_ATmega328__) || defined(__AVR_ATmega168__)
+#else
   //if using an atmega328p or similar build with eeprom enabled
   #define atmega
-#else
-  //define nothing
 #endif
 
-#ifdef easytimer
-  #include "Easytimer.h"
+#if defined(softout)
+  #include <SoftwareSerial.h>
+  SoftwareSerial mySerial(8, 9);
 #endif
 
 //TODO, set pins for attiny85 boards
@@ -61,7 +59,6 @@ const int easylap_id = 2;
   #include <EEPROM.h>
   #include "saved.h"
 #endif
-String incomingString = "";   // for incoming serial data
 
 // Include libraries for IR LED frequency, speed and encoding
 #include "IRsnd.h"
@@ -78,11 +75,11 @@ unsigned long previousMillis = 0; // Allow status LED to blink without sacrafici
 void setup() {
   #ifdef atmega
     // save the new transponder numbers in eeprom if they are not already there
-    if (EEPROMReadlong(64) != tx_id) {
-      long tx_id = EEPROMReadlong(64);
+    if (EEPROMReadlong(0) != tx_id) {
+      long tx_id = EEPROMReadlong(0);
     }
-    if (EEPROMReadlong(70) != easylap_id) {
-      long tx_alt_id = EEPROMReadlong(70);
+    if (EEPROMReadlong(4) != tx_alt_id) {
+      long tx_alt_id = EEPROMReadlong(4);
     }
   #endif
 
@@ -91,11 +88,28 @@ void setup() {
   digitalWrite(bridgePinIn, HIGH);
   pinMode(bridgePinOut, OUTPUT);
   digitalWrite(bridgePinOut, LOW);
-
-  #ifdef atmega
+  
+  #ifdef debug
     Serial.begin(9600);
-    #if defined(micro) & defined(debug)
-      while (!Serial)
+    while (!Serial)
+  #endif
+
+  
+  #if defined(softout)
+    #if defined(micro)
+      mySerial.begin(38400);  // Begin software serial interface at 38400.
+      pinMode(5, OUTPUT);     // Set output pin for timer
+      TCCR3A = _BV(WGM31); // Set registers for fast PWM.
+      TCCR3B = _BV(WGM33) | _BV(CS30); // Read the 328p datasheet for more details on fast PWM.
+      OCR3A = 34; // At 16MHz, these values produce roughly 455KHz signal. 16M / 35 = 457K.
+      OCR3B = 17; // This should be half of above value. This can be adjusted slightly for taste.
+    #else
+      mySerial.begin(38400);  // Begin software serial interface at 38400.
+      pinMode(3, OUTPUT);     // Set output pin for OCR2B
+      TCCR2A = _BV(COM2A1) | _BV(COM2B1) | _BV(WGM21) | _BV(WGM20); // Set registers for fast PWM.
+      TCCR2B = _BV(WGM22) | _BV(CS20); // Read the 328p datasheet for more details on fast PWM.
+      OCR2A = 34; // At 16MHz, these values produce roughly 455KHz signal. 16M / 35 = 457K.
+      OCR2B = 17; // This should be half of above value. This can be adjusted slightly for taste.
     #endif
   #endif
 
@@ -103,24 +117,36 @@ void setup() {
   #ifdef debug
     Serial.print("Building code from: ");
   #endif
-  #if defined(easytimer)
-    geteasylapcode();
-  #else 
-    if (digitalRead(bridgePinIn)) {
-      #ifdef debug
-        Serial.println("Main ID:");
-        Serial.println(tx_id);
-      #endif
-      interval = 200; // Blink LED faster for regular id by default
-      makeOutputCode(tx_id); // use alternate ID if unbridged
-    } else {
-      #ifdef debug
-        Serial.println("Alternate ID: ");
-        Serial.println(tx_alt_id);
-      #endif
-      interval = 1000; // Blink LED slower for alt id
-      makeOutputCode(tx_alt_id); // use standard ID otherwise
-    }
+  if (digitalRead(bridgePinIn)) {
+    #ifdef debug
+      Serial.println("Main ID:");
+      Serial.println(tx_id);
+    #endif
+    interval = 200; // Blink LED faster for regular id by default
+    makeOutputCode(tx_id); // use alternate ID if unbridged
+  } else {
+    #ifdef debug
+      Serial.println("Alternate ID: ");
+      Serial.println(tx_alt_id);
+    #endif
+    interval = 1000; // Blink LED slower for alt id
+    makeOutputCode(tx_alt_id); // use standard ID otherwise
+  }
+  
+  #if defined(debug) && defined(softout)
+    Serial.println("Sending: ");
+    Serial.print("0"); // fix an issue where leading 0 in hex does not appear in serial.print
+    Serial.print(bit1, HEX);
+    Serial.print(" ");
+    Serial.print(bit2, HEX);
+    Serial.print(" ");
+    Serial.print(bit3, HEX);
+    Serial.print(" ");
+    Serial.print(bit4, HEX);
+    Serial.print(" ");
+    Serial.print(bit5, HEX);
+    Serial.print(" ");
+    Serial.println(bit6, HEX);
   #endif
   
   // Set up for blinking the status LED
@@ -128,62 +154,20 @@ void setup() {
 }
 
 void loop() {
-  #ifdef atmega
-  //serial data stuff for coreir-uplink support
-  // send data only when you receive data:
-  #ifdef easytimer
-    if (Serial.available() > 0) {
-      // read the incoming byte:
-      incomingString = Serial.readString();
-      //if asked, send back the current ID
-      if (incomingString == "readID") {
-        Serial.println(EEPROMReadlong(70));
-        incomingString = "";
-      }
-      else {
-      //if asked, set a new ID
-        incomingString.remove(0,7);
-        long idtolong = incomingString.toInt();
-        EEPROMWritelong(70, idtolong);
-        delayMicroseconds(3000);
-        long easylap_id = EEPROMReadlong(70);
-        Serial.println(easylap_id);
-        incomingString = "";
-        }
-      }
-    #else
-      if (Serial.available() > 0) {
-      // read the incoming byte:
-      incomingString = Serial.readString();
-      //if asked, send back the current ID
-      if (incomingString == "readID") {
-        Serial.println(EEPROMReadlong(64));
-        incomingString = "";
-      }
-      //if asked, set a new ID
-      if (incomingString.length() > 7) {
-        incomingString.remove(0,7);
-        long idtolong = incomingString.toInt();
-        EEPROMWritelong(64, idtolong);
-        delayMicroseconds(3000);
-        long tx_id = EEPROMReadlong(64);
-        Serial.println(tx_id);
-        incomingString = "";
-        }
-      }
-    #endif
-    #endif
+  #if defined(softout)
+    mySerial.write(bit1); // transmit one byte at a time.
+    mySerial.write(bit2);
+    mySerial.write(bit3);
+    mySerial.write(bit4);
+    mySerial.write(bit5);
+    mySerial.write(bit6);
+    delay(5); // wait 5ms before transmitting again.
+  #else
+    //Send the IR signal, then wait the appropriate amount of time before re-sending
+    irsend.sendRaw(outputcode, codeLen, khz);
+    delayMicroseconds(2000);
+  #endif
 
-    
-  #ifdef easytimer
-      irsend.sendRaw(buffer,NUM_BITS,38);
-      delay(17 + random(0, 5));
-   #else
-      //Send the IR signal, then wait the appropriate amount of time before re-sending
-      irsend.sendRaw(outputcode, codeLen, khz);
-      delay(7 + random(2, 5));
-    #endif
-  
   // -----Status LED blink code start -----
     unsigned long currentMillis = millis();
     if (currentMillis - previousMillis >= interval) {
@@ -199,5 +183,5 @@ void loop() {
       digitalWrite(ledPin, ledState);
     // -----LED blink code end -----
   }
-  delayMicroseconds(500);
+  delayMicroseconds(1800);
 }
